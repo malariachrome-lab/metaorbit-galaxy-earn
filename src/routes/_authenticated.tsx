@@ -3,16 +3,16 @@ import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/_authenticated")({
   beforeLoad: async ({ location }) => {
-    // First try to get session from storage (faster)
+    // Use getSession first (fast, from localStorage cache)
     const { data: { session } } = await supabase.auth.getSession();
     
-    if (!session) {
-      // Double-check with getUser if no session (handles edge cases)
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        throw redirect({ to: "/login", search: { redirect: location.href } as any });
-      }
+    if (session?.user) {
+      // Session exists and is valid, proceed
+      return;
     }
+    
+    // No cached session - redirect to login
+    throw redirect({ to: "/login", search: { redirect: location.href } as any });
   },
   component: () => <Outlet />,
 });

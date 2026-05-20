@@ -53,6 +53,10 @@ function ChoosePackage() {
     });
     if (error) { setActivating(null); toast.error(error.message); return; }
     
+    // Store reference in sessionStorage so payment-success can access it
+    sessionStorage.setItem("mo_pending_payment_ref", reference);
+    sessionStorage.setItem("mo_pending_package_id", pkg.id);
+    
     // Build callback URL to redirect back after payment
     // Paynecta will append status to this URL when redirecting back
     const callbackUrl = `${window.location.origin}/payment-success?reference=${encodeURIComponent(reference)}`;

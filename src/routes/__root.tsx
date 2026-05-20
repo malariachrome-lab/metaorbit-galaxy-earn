@@ -87,9 +87,16 @@ function AuthCacheInvalidator() {
   const router = useRouter();
   const qc = useQueryClient();
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(() => {
-      router.invalidate();
-      qc.invalidateQueries();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      // Only invalidate on significant auth events, not on every state change
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT" || event === "TOKEN_REFRESHED") {
+        // Use a small delay to batch rapid auth state changes
+        const timeoutId = setTimeout(() => {
+          router.invalidate();
+          qc.invalidateQueries();
+        }, 100);
+        return () => clearTimeout(timeoutId);
+      }
     });
     return () => subscription.unsubscribe();
   }, [router, qc]);

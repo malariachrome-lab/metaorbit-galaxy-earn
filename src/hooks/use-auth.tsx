@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, useRef, useCallback, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -35,50 +35,145 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+// Cache profile/roles in sessionStorage to prevent flash on refresh
+const PROFILE_CACHE_KEY = "mo_profile_cache";
+const ROLES_CACHE_KEY = "mo_roles_cache";
+
+function getCachedProfile(): Profile | null {
+  try {
+    const cached = sessionStorage.getItem(PROFILE_CACHE_KEY);
+    return cached ? JSON.parse(cached) : null;
+  } catch { return null; }
+}
+
+function getCachedRoles(): AppRole[] {
+  try {
+    const cached = sessionStorage.getItem(ROLES_CACHE_KEY);
+    return cached ? JSON.parse(cached) : [];
+  } catch { return []; }
+}
+
+function cacheUserData(profile: Profile | null, roles: AppRole[]) {
+  try {
+    if (profile) {
+      sessionStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(profile));
+    } else {
+      sessionStorage.removeItem(PROFILE_CACHE_KEY);
+    }
+    if (roles.length) {
+      sessionStorage.setItem(ROLES_CACHE_KEY, JSON.stringify(roles));
+    } else {
+      sessionStorage.removeItem(ROLES_CACHE_KEY);
+    }
+  } catch { /* ignore */ }
+}
+
+function clearUserCache() {
+  try {
+    sessionStorage.removeItem(PROFILE_CACHE_KEY);
+    sessionStorage.removeItem(ROLES_CACHE_KEY);
+  } catch { /* ignore */ }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [roles, setRoles] = useState<AppRole[]>([]);
+  const [profile, setProfile] = useState<Profile | null>(getCachedProfile);
+  const [roles, setRoles] = useState<AppRole[]>(getCachedRoles);
   const [loading, setLoading] = useState(true);
+  const loadingRef = useRef(false);
+  const initializedRef = useRef(false);
 
-  const loadUserData = async (userId: string) => {
-    const [{ data: profileData }, { data: rolesData }] = await Promise.all([
-      supabase.from("profiles").select("*").eq("user_id", userId).maybeSingle(),
-      supabase.from("user_roles").select("role").eq("user_id", userId),
-    ]);
-    setProfile((profileData as Profile | null) ?? null);
-    setRoles((rolesData ?? []).map((r) => r.role as AppRole));
-  };
+  const loadUserData = useCallback(async (userId: string) => {
+    // Prevent concurrent loads
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    
+    try {
+      const [{ data: profileData }, { data: rolesData }] = await Promise.all([
+        supabase.from("profiles").select("*").eq("user_id", userId).maybeSingle(),
+        supabase.from("user_roles").select("role").eq("user_id", userId),
+      ]);
+      
+      const newProfile = (profileData as Profile | null) ?? null;
+      const newRoles = (rolesData ?? []).map((r) => r.role as AppRole);
+      
+      setProfile(newProfile);
+      setRoles(newRoles);
+      cacheUserData(newProfile, newRoles);
+    } finally {
+      loadingRef.current = false;
+    }
+  }, []);
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
+    // Prevent double initialization in strict mode
+    if (initializedRef.current) return;
+    initializedRef.current = true;
+
+    let mounted = true;
+
+    const initAuth = async () => {
+      try {
+        // First try getSession (fast, from localStorage)
+        const { data: { session: storedSession } } = await supabase.auth.getSession();
+        
+        if (!mounted) return;
+        
+        if (storedSession?.user) {
+          setSession(storedSession);
+          // Load fresh user data in background
+          loadUserData(storedSession.user.id);
+        } else {
+          // No stored session, clear any stale cache
+          clearUserCache();
+          setProfile(null);
+          setRoles([]);
+        }
+      } catch (error) {
+        console.error("Auth init error:", error);
+        clearUserCache();
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    };
+
+    initAuth();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, newSession) => {
+      if (!mounted) return;
+      
       setSession(newSession);
-      if (newSession?.user) {
-        setTimeout(() => { void loadUserData(newSession.user.id); }, 0);
-      } else {
+      
+      if (event === "SIGNED_OUT") {
+        clearUserCache();
         setProfile(null);
         setRoles([]);
+      } else if (newSession?.user) {
+        // Use setTimeout to avoid race conditions with Supabase
+        setTimeout(() => {
+          if (mounted) loadUserData(newSession.user.id);
+        }, 0);
       }
     });
 
-    supabase.auth.getSession().then(async ({ data }) => {
-      setSession(data.session);
-      if (data.session?.user) await loadUserData(data.session.user.id);
-      setLoading(false);
-    });
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [loadUserData]);
 
-    return () => subscription.unsubscribe();
-  }, []);
+  const refresh = useCallback(async () => {
+    if (session?.user) {
+      await loadUserData(session.user.id);
+    }
+  }, [session?.user, loadUserData]);
 
-  const refresh = async () => {
-    if (session?.user) await loadUserData(session.user.id);
-  };
-
-  const signOut = async () => {
-    await supabase.auth.signOut();
+  const signOut = useCallback(async () => {
+    clearUserCache();
     setProfile(null);
     setRoles([]);
-  };
+    await supabase.auth.signOut();
+  }, []);
 
   const value: AuthContextValue = {
     session,

@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useEffect, useState, useRef } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,11 +20,25 @@ export const Route = createFileRoute("/payment-success")({
 
 function PaymentSuccessPage() {
   const navigate = useNavigate();
-  const { reference, status: urlStatus, transaction_id } = Route.useSearch();
+  const queryClient = useQueryClient();
+  const { reference: urlReference, status: urlStatus, transaction_id } = Route.useSearch();
   const { session, profile, refresh } = useAuth();
   const [pollCount, setPollCount] = useState(0);
-  const [activationAttempted, setActivationAttempted] = useState(false);
+  const activationAttemptedRef = useRef(false);
+  const redirectTimerRef = useRef<NodeJS.Timeout | null>(null);
   const maxPolls = 30; // Poll for up to 60 seconds (30 * 2s)
+  
+  // Try to get reference from sessionStorage if not in URL (handles Paynecta redirect edge cases)
+  const reference = urlReference || (typeof window !== "undefined" ? sessionStorage.getItem("mo_pending_payment_ref") : null) || "";
+
+  // Cleanup function for redirect timer
+  useEffect(() => {
+    return () => {
+      if (redirectTimerRef.current) {
+        clearTimeout(redirectTimerRef.current);
+      }
+    };
+  }, []);
 
   // Mutation to activate payment directly when redirected with success status
   const activateMutation = useMutation({
@@ -93,18 +107,24 @@ function PaymentSuccessPage() {
       return payment;
     },
     onSuccess: () => {
+      // Clear pending payment from sessionStorage
+      sessionStorage.removeItem("mo_pending_payment_ref");
+      sessionStorage.removeItem("mo_pending_package_id");
+      // Refresh auth to get updated profile
       refresh();
+      // Invalidate relevant queries
+      queryClient.invalidateQueries({ queryKey: ["payment-status"] });
     },
   });
 
   // If redirected with success status from Paynecta, activate immediately
   useEffect(() => {
     const isSuccess = urlStatus === "success" || urlStatus === "completed" || urlStatus === "successful";
-    if (isSuccess && reference && !activationAttempted && session) {
-      setActivationAttempted(true);
+    if (isSuccess && reference && !activationAttemptedRef.current && session) {
+      activationAttemptedRef.current = true;
       activateMutation.mutate();
     }
-  }, [urlStatus, reference, activationAttempted, session]);
+  }, [urlStatus, reference, session]);
 
   // Poll for payment status
   const { data: payment, isLoading } = useQuery({

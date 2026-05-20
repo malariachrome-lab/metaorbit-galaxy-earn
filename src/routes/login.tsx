@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ function toEmail(input: string) {
 }
 
 function LoginPage() {
+  const navigate = useNavigate();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -43,8 +44,8 @@ function LoginPage() {
     
     toast.success("Welcome back! Redirecting...");
     
-    // Use window.location for reliable redirect after auth state change
-    window.location.href = targetRoute;
+    // Use router navigation for smooth transition without full page reload
+    navigate({ to: targetRoute });
   };
 
   return (

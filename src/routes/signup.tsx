@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ function toEmail(input: string) {
 }
 
 function SignupPage() {
+  const navigate = useNavigate();
   const { ref } = Route.useSearch();
   const [username, setUsername] = useState("");
   const [phone, setPhone] = useState("");
@@ -46,8 +47,8 @@ function SignupPage() {
     }
     toast.success("Account created — redirecting to packages...");
     
-    // Use window.location for reliable redirect after auth
-    window.location.href = "/choose-package";
+    // Use router navigation for smooth transition
+    navigate({ to: "/choose-package" });
   };
 
   return (
